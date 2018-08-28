@@ -12,6 +12,7 @@ import struct
 import subprocess
 import sys
 import tarfile
+import dbus
 
 from filelock import FileLock, Timeout
 
@@ -468,17 +469,45 @@ def dump_dbg_scripts():
             f.write("\t\"" + wine_path + "\" \"${@:-${DEF_CMD[@]}}\"\n")
     os.chmod(dir + "run", 0o755)
 
+class ScreenSaverInhibition:
+    def __init__(self):
+        try:
+            bus = dbus.SessionBus()
+            proxy_obj = bus.get_object('org.freedesktop.ScreenSaver', '/ScreenSaver')
+            self.screen_saver_iface = dbus.Interface(proxy_obj, 'org.freedesktop.ScreenSaver')
+        except dbus.DBusException:
+            self.screen_saver_iface = None
+            pass
+
+    def __enter__(self):
+        if self.screen_saver_iface is not None:
+            try:
+                self.cookie = self.screen_saver_iface.Inhibit("Steam Proton", "Playing a game")
+            except dbus.DBusException:
+                log("Inhibiting screen saver failed.")
+                pass
+        return self
+
+    def __exit__(self, exception_type, exception_value, traceback):
+        if self.screen_saver_iface is not None:
+            try:
+                self.screen_saver_iface.UnInhibit(self.cookie)
+            except dbus.DBusException:
+                log("Releasing screen saver inhibition failed.")
+                pass
+
 def run():
     if "PROTON_DUMP_DEBUG_COMMANDS" in env:
         try:
             dump_dbg_scripts()
         except:
             log("Unable to write debug scripts! " + str(sys.exc_info()[1]))
-    if game_arch == ARCH_UNKNOWN:
-        #probably a batch script or something, hopefully start.exe can handle it
-        run_wine([wine_path, "start", "/unix"] + sys.argv[2:])
-    else:
-        run_wine([wine_path] + sys.argv[2:])
+    with ScreenSaverInhibition():
+        if game_arch == ARCH_UNKNOWN:
+            #probably a batch script or something, hopefully start.exe can handle it
+            run_wine([wine_path, "start", "/unix"] + sys.argv[2:])
+        else:
+            run_wine([wine_path] + sys.argv[2:])
 
 if sys.version_info[0] == 2:
     binary_stdout = sys.stdout
